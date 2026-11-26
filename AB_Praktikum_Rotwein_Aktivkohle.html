@@ -768,16 +768,36 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     }catch(e){}
   })();
 
-  var saveT = null;
+  var saveT = null, dirty = false, busy = false;
+  function doSave(){
+    saveT = null;
+    if(!dirty) return;
+    if(busy){ save(); return; }
+    dirty = false;
+    if(sv('prot', doc)){ if(statusEl.textContent!=='✓ Automatisch gespeichert') status('✓ Automatisch gespeichert'); }
+    else status('⚠ Der Speicher des Browsers ist voll. Lösche ein Foto oder entferne eine leere Seite.', true);
+  }
   function save(){
+    dirty = true;
     clearTimeout(saveT);
     saveT = setTimeout(function(){
-      if(sv('prot', doc)) status('✓ Automatisch gespeichert');
-      else status('⚠ Der Speicher des Browsers ist voll. Lösche ein Foto oder entferne eine leere Seite.', true);
-    }, 500);
+      if(window.requestIdleCallback) window.requestIdleCallback(doSave, {timeout:2000}); else doSave();
+    }, 2500);
   }
-  function pushUndo(){ hist.push(JSON.stringify(doc.pages)); if(hist.length>40) hist.shift(); }
+  function saveNow(){ clearTimeout(saveT); busy = false; doSave(); }
+  window.addEventListener('pagehide', saveNow);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='hidden') saveNow(); });
+  /* Rückgängig: bei Strichen nur ein Verweis statt Kopie des ganzen Protokolls */
+  function pushUndo(entry){ hist.push(entry || JSON.stringify(doc.pages)); if(hist.length>60) hist.shift(); }
 
+  var paperC = null, paperS = 0;
+  function drawPaperCached(ctx){
+    if(!paperC || paperS!==S){
+      paperC = document.createElement('canvas'); paperC.width = PW*S; paperC.height = PH*S; paperS = S;
+      var pc = paperC.getContext('2d'); pc.setTransform(S,0,0,S,0,0); drawPaper(pc);
+    }
+    ctx.setTransform(1,0,0,1,0,0); ctx.drawImage(paperC,0,0); ctx.setTransform(S,0,0,S,0,0);
+  }
   function drawPaper(ctx){
     ctx.fillStyle = '#fff'; ctx.fillRect(0,0,PW,PH);
     var g = 5*MM; ctx.strokeStyle = '#b9c0c8'; ctx.lineWidth = 0.7; ctx.beginPath();
@@ -809,7 +829,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
   function render(pi){
     var c = canv[pi]; if(!c) return;
     var ctx = c.getContext('2d'); ctx.setTransform(S,0,0,S,0,0);
-    drawPaper(ctx);
+    drawPaperCached(ctx);
     var objs = doc.pages[pi].o;
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     objs.forEach(function(o){ if(o.t==='i'){ var im = getImg(o.id,pi); if(im.complete && im.naturalWidth) ctx.drawImage(im,o.x,o.y,o.w,o.h); else { ctx.fillStyle='#eee'; ctx.fillRect(o.x,o.y,o.w,o.h); } } });
@@ -868,14 +888,14 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
       try{ c.setPointerCapture(e.pointerId); }catch(err){}
       var pt = pos(c,e), objs = doc.pages[pi].o;
       if(tool==='pen'){
-        pushUndo();
+        busy = true;
         snapL = rSnap(pi,pt,width);
         if(snapL) pt = rProj(snapL,pt);
         cur = {t:'s', c:color, w:width, v:e.pointerType==='pen'?1:0, p:[r1(pt.x),r1(pt.y),prs(e)]};
-        objs.push(cur); act = 'draw';
+        objs.push(cur); act = 'draw'; pushUndo({pi:pi, add:cur});
         var ctx = c.getContext('2d'); ctx.setTransform(S,0,0,S,0,0); drawStroke(ctx,cur);
       } else if(tool==='erase'){
-        pushUndo(); act = 'erase'; erase(pi,pt);
+        eraseRec = {pi:pi, rm:[]}; pushUndo(eraseRec); act = 'erase'; erase(pi,pt);
       } else if(tool==='move'){
         act = null;
         if(sel && sel.pi===pi && objs[sel.i]){
@@ -931,21 +951,23 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
         var pa = Math.round(ps/n*100)/100;
         cur.p = [r1(lo.x),r1(lo.y),pa, r1(hi.x),r1(hi.y),pa];
       }
-      if(act==='draw') render(pi);
-      snapL = null;
+      if(act==='draw' && (snapL || (ruler.on && ruler.pi===pi))) render(pi);
+      snapL = null; busy = false;
+      if(act==='erase' && eraseRec && !eraseRec.rm.length && hist[hist.length-1]===eraseRec) hist.pop();
+      eraseRec = null;
       if(act==='draw' || act==='erase' || act==='drag' || act==='resize'){ save(); }
-      if(act==='erase') render(pi);
       act = null; cur = null;
     }
     c.addEventListener('pointerup', end);
     c.addEventListener('pointercancel', end);
     c.addEventListener('contextmenu', function(e){ e.preventDefault(); });
   }
+  var eraseRec = null;
   function erase(pi,pt){
     var objs = doc.pages[pi].o, R = 9, changed = false;
     for(var i=objs.length-1;i>=0;i--){
       var o = objs[i]; if(o.t!=='s') continue;
-      for(var k=0;k<o.p.length;k+=3){ if(Math.abs(o.p[k]-pt.x)<R && Math.abs(o.p[k+1]-pt.y)<R){ objs.splice(i,1); changed = true; break; } }
+      for(var k=0;k<o.p.length;k+=3){ if(Math.abs(o.p[k]-pt.x)<R && Math.abs(o.p[k+1]-pt.y)<R){ objs.splice(i,1); if(eraseRec) eraseRec.rm.push({i:i, o:o}); changed = true; break; } }
     }
     if(changed) render(pi);
   }
@@ -966,8 +988,18 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     status(penOnly ? 'Nur der Stift schreibt, mit dem Finger scrollst du.' : 'Stift und Finger schreiben. Zum Scrollen neben das Papier tippen.'); });
   $('#pUndo').addEventListener('click', function(){
     if(!hist.length){ status('Nichts zum Rückgängigmachen.'); return; }
-    var n = doc.pages.length; doc.pages = JSON.parse(hist.pop()); sel = null;
-    if(doc.pages.length!==n) buildPages(); else renderAll();
+    var h = hist.pop(); sel = null;
+    if(typeof h==='string'){
+      var n = doc.pages.length; doc.pages = JSON.parse(h);
+      if(doc.pages.length!==n) buildPages(); else renderAll();
+    } else if(h.add){
+      var arr = doc.pages[h.pi] ? doc.pages[h.pi].o : [], ix = arr.indexOf(h.add);
+      if(ix>=0) arr.splice(ix,1); render(h.pi);
+    } else if(h.rm){
+      var ar2 = doc.pages[h.pi].o;
+      for(var r=h.rm.length-1;r>=0;r--) ar2.splice(h.rm[r].i,0,h.rm[r].o);
+      render(h.pi);
+    }
     save();
   });
   $('#pRuler').addEventListener('click', function(){
