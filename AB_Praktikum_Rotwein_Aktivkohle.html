@@ -147,6 +147,10 @@ body.pfull-on{overflow:hidden}
 #protokollBox.pfull::before,#protokollBox.pfull > .tag,#protokollBox.pfull > p{display:none}
 #protokollBox.pfull .ptools{margin:0 -.6rem .6rem;border-radius:0;border-width:0 0 1px}
 #protokollBox.pfull .page{max-width:1100px}
+#protokollBox.pfull .pages{padding:0 46px}
+.pnav{display:none}
+#protokollBox.pfull .pnav{display:flex;flex-direction:column;gap:10px;position:fixed;right:6px;top:50%;transform:translateY(-50%);z-index:1001}
+.pnav button{width:44px;height:56px;border-radius:10px;border:1.5px solid var(--live);background:rgba(255,255,255,.92);color:var(--live);font-size:1.3rem;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.2)}
 #pSave.dirty{border-color:#e4572e;background:#fdeee8;font-weight:700}
 #pFull.on{border-color:var(--live);background:var(--live-bg)}
 button.printbtn{position:fixed;right:1rem;bottom:1rem;z-index:5;border:1px solid var(--rule);background:rgba(255,255,255,.92);color:var(--mut);border-radius:20px;padding:.35rem .9rem;font-size:.82rem}
@@ -407,7 +411,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
 
   <section class="box live" id="protokollBox">
     <span class="tag"></span>
-    <p><b>Protokoll-Papier:</b> Schreibe mit dem Apple Pencil oder dem Finger. Mit „Foto“ fügst du ein Bild ein. Mit „Bewegen“ kannst du es verschieben, größer ziehen (Ecke ↘) oder löschen (×). Mit „Lineal“ blendest du ein Lineal ein: mit dem Finger verschieben, am blauen ⟳ drehen, mit dem Stift am Rand entlang zeichnen. „Vollbild“ zeigt nur das Papier mit der Werkzeugleiste. <b>Tippe zwischendurch und am Ende auf „💾 Speichern“.</b></p>
+    <p><b>Protokoll-Papier:</b> Schreibe mit dem Apple Pencil oder dem Finger. Mit „Foto“ fügst du ein Bild ein. Mit „Bewegen“ kannst du es verschieben, größer ziehen (Ecke ↘) oder löschen (×). Mit „Lineal“ blendest du ein Lineal ein: mit dem Finger verschieben, am blauen ⟳ drehen, mit dem Stift am Rand entlang zeichnen. „Vollbild“ zeigt nur das Papier mit der Werkzeugleiste. Scrollen: mit zwei Fingern, am Rand neben dem Papier oder mit ▲ ▼. <b>Tippe zwischendurch und am Ende auf „💾 Speichern“.</b></p>
     <div class="ptools" role="toolbar" aria-label="Werkzeuge für das Protokoll">
       <button type="button" data-tool="pen" title="Stift">✎ Stift</button>
       <button type="button" data-tool="erase" title="Radierer (löscht ganze Striche)">⌫ Radierer</button>
@@ -433,6 +437,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     </div>
     <div class="pstatus" id="pStatus" aria-live="polite"></div>
     <div class="pages" id="pages"></div>
+    <div class="pnav"><button type="button" id="pUp" title="Nach oben blättern">▲</button><button type="button" id="pDown" title="Nach unten blättern">▼</button></div>
     <div class="pagebtns">
       <button type="button" class="lbtn" id="pAdd">＋ Neue Seite</button>
       <button type="button" class="lbtn" id="pDel">− Letzte Seite entfernen</button>
@@ -869,27 +874,35 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
   function pos(c,e){ var r = c.getBoundingClientRect(); return {x:(e.clientX-r.left)/r.width*PW, y:(e.clientY-r.top)/r.height*PH}; }
   function r1(v){ return Math.round(v*10)/10; }
   function prs(e){ return e.pointerType==='pen' ? Math.round((e.pressure||0.5)*100)/100 : 0.5; }
-  var lastPen = 0;
+  var lastPen = 0, touchN = 0;
+  function scrollDoc(dy){ var bx = $('#protokollBox'); if(bx.classList.contains('pfull')) bx.scrollTop += dy; else window.scrollBy(0, dy); }
 
   function attach(c,pi){
-    var cur = null, act = null, lastY = 0, start = null, orig = null, snapL = null;
+    var cur = null, act = null, lastY = 0, start = null, orig = null, snapL = null, actPid = null;
     c.addEventListener('pointerdown', function(e){
       if(e.pointerType==='pen'){
         lastPen = Date.now();
         if(!penOnly && !ld('penAuto',false)){ penOnly = true; sv('penOnly',true); sv('penAuto',true); syncTools(); status('Apple Pencil erkannt: Ab jetzt schreibt nur der Stift, mit dem Finger kannst du scrollen. (Umschalten mit „Nur Stift“)'); }
       }
+      if(e.pointerType==='touch'){
+        touchN = e.isPrimary ? 1 : touchN+1;
+        if(touchN>=2){
+          /* zweiter Finger: immer scrollen, angefangenen Finger-Strich verwerfen */
+          if(act==='draw' && cur && !cur.v){ var oo = doc.pages[pi].o, ci = oo.indexOf(cur); if(ci>=0) oo.splice(ci,1); if(hist.length && hist[hist.length-1].add===cur) hist.pop(); cur = null; busy = false; render(pi); }
+          act = 'scroll'; actPid = e.pointerId; lastY = e.clientY; return;
+        }
+      }
       var pt0 = pos(c,e), rh = rHit(pi,pt0);
-      if(e.pointerType==='touch' && penOnly && (Date.now()-lastPen<800 || (e.width>40 && e.height>40))){ act = 'ignore'; return; }
+      if(e.pointerType==='touch' && penOnly && (Date.now()-lastPen<400 || (e.width>70 && e.height>70))){ act = 'ignore'; return; }
       if(rh){
         e.preventDefault(); try{ c.setPointerCapture(e.pointerId); }catch(er){}
         act = rh; start = pt0; orig = {x:ruler.x, y:ruler.y}; return;
       }
       if(e.pointerType==='touch' && penOnly){
-        if(Date.now()-lastPen<800 || (e.width>40 && e.height>40)) { act = 'ignore'; return; }
-        act = 'scroll'; lastY = e.clientY; return;
+        act = 'scroll'; actPid = e.pointerId; lastY = e.clientY; return;
       }
       if(e.button>0) return;
-      e.preventDefault();
+      e.preventDefault(); actPid = e.pointerId;
       try{ c.setPointerCapture(e.pointerId); }catch(err){}
       var pt = pos(c,e), objs = doc.pages[pi].o;
       if(tool==='pen'){
@@ -918,7 +931,8 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     });
     c.addEventListener('pointermove', function(e){
       if(!act || act==='ignore') return;
-      if(act==='scroll'){ var bx = $('#protokollBox'); if(bx.classList.contains('pfull')) bx.scrollTop += lastY-e.clientY; else window.scrollBy(0, lastY-e.clientY); lastY = e.clientY; return; }
+      if(actPid!==null && e.pointerId!==actPid && act!=='rmove' && act!=='rrot') return;
+      if(act==='scroll'){ scrollDoc(lastY-e.clientY); lastY = e.clientY; return; }
       e.preventDefault();
       var evs = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
       if(act==='draw'){
@@ -963,8 +977,13 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
       if(act==='draw' || act==='erase' || act==='drag' || act==='resize'){ save(); }
       act = null; cur = null;
     }
-    c.addEventListener('pointerup', end);
-    c.addEventListener('pointercancel', end);
+    function up(e){
+      if(e.pointerType==='touch') touchN = Math.max(0, touchN-1);
+      if(act==='scroll' && e.pointerId!==actPid) return;
+      end(); actPid = null;
+    }
+    c.addEventListener('pointerup', up);
+    c.addEventListener('pointercancel', up);
     c.addEventListener('contextmenu', function(e){ e.preventDefault(); });
     c.addEventListener('touchstart', function(e){ e.preventDefault(); }, {passive:false});
     c.addEventListener('touchmove', function(e){ e.preventDefault(); }, {passive:false});
@@ -1029,6 +1048,8 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     if(on){ pBox.scrollTop = 0; }
     else { pBox.scrollIntoView({block:'start'}); }
   }
+  $('#pUp').addEventListener('click', function(){ pBox.scrollBy({top:-pBox.clientHeight*0.7, behavior:'smooth'}); });
+  $('#pDown').addEventListener('click', function(){ pBox.scrollBy({top:pBox.clientHeight*0.7, behavior:'smooth'}); });
   $('#pFull').addEventListener('click', function(){
     var on = !pBox.classList.contains('pfull');
     setPFull(on);
