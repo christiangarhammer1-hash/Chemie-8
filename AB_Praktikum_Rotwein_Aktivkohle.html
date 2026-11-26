@@ -141,6 +141,13 @@ input[type=range]{width:100%}
 .page .pnum{position:absolute;right:10px;bottom:6px;font-size:.75rem;color:#8a96a3;pointer-events:none}
 .pagebtns{display:flex;flex-wrap:wrap;gap:.4rem;justify-content:center;margin-top:.7rem}
 #printPages{display:none}
+/* Protokoll im Vollbild: Papier füllt den Bildschirm, Werkzeugleiste bleibt oben */
+body.pfull-on{overflow:hidden}
+#protokollBox.pfull{position:fixed;inset:0;z-index:1000;margin:0;border:0;border-radius:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 .6rem 2rem;background:#d9e1e8}
+#protokollBox.pfull::before,#protokollBox.pfull > .tag,#protokollBox.pfull > p{display:none}
+#protokollBox.pfull .ptools{margin:0 -.6rem .6rem;border-radius:0;border-width:0 0 1px}
+#protokollBox.pfull .page{max-width:1100px}
+#pFull.on{border-color:var(--live);background:var(--live-bg)}
 button.printbtn{position:fixed;right:1rem;bottom:1rem;z-index:5;border:1px solid var(--rule);background:rgba(255,255,255,.92);color:var(--mut);border-radius:20px;padding:.35rem .9rem;font-size:.82rem}
 button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
 
@@ -399,7 +406,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
 
   <section class="box live" id="protokollBox">
     <span class="tag"></span>
-    <p><b>Protokoll-Papier:</b> Schreibe mit dem Apple Pencil oder dem Finger. Mit „Foto“ fügst du ein Bild ein. Mit „Bewegen“ kannst du es verschieben, größer ziehen (Ecke ↘) oder löschen (×). Mit „Lineal“ blendest du ein Lineal ein: mit dem Finger verschieben, am blauen ⟳ drehen, mit dem Stift am Rand entlang zeichnen. Alles wird automatisch gespeichert.</p>
+    <p><b>Protokoll-Papier:</b> Schreibe mit dem Apple Pencil oder dem Finger. Mit „Foto“ fügst du ein Bild ein. Mit „Bewegen“ kannst du es verschieben, größer ziehen (Ecke ↘) oder löschen (×). Mit „Lineal“ blendest du ein Lineal ein: mit dem Finger verschieben, am blauen ⟳ drehen, mit dem Stift am Rand entlang zeichnen. „Vollbild“ zeigt nur das Papier mit der Werkzeugleiste. Alles wird automatisch gespeichert.</p>
     <div class="ptools" role="toolbar" aria-label="Werkzeuge für das Protokoll">
       <button type="button" data-tool="pen" title="Stift">✎ Stift</button>
       <button type="button" data-tool="erase" title="Radierer (löscht ganze Striche)">⌫ Radierer</button>
@@ -419,6 +426,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
       <button type="button" id="pUndo" title="Rückgängig">↶</button>
       <button type="button" id="pRuler" title="Lineal ein-/ausblenden">📏 Lineal</button>
       <button type="button" id="pPen" title="Wenn aktiv: Nur der Apple Pencil schreibt, mit dem Finger scrollst du.">✋ Nur Stift</button>
+      <button type="button" id="pFull" title="Protokoll-Papier im Vollbild (Werkzeuge bleiben sichtbar)">⛶ Vollbild</button>
       <button type="button" id="pPrint" title="Nur das Protokoll drucken oder als PDF speichern">🖨 Protokoll drucken</button>
     </div>
     <div class="pstatus" id="pStatus" aria-live="polite"></div>
@@ -872,7 +880,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     });
     c.addEventListener('pointermove', function(e){
       if(!act || act==='ignore') return;
-      if(act==='scroll'){ window.scrollBy(0, lastY-e.clientY); lastY = e.clientY; return; }
+      if(act==='scroll'){ var bx = $('#protokollBox'); if(bx.classList.contains('pfull')) bx.scrollTop += lastY-e.clientY; else window.scrollBy(0, lastY-e.clientY); lastY = e.clientY; return; }
       e.preventDefault();
       var evs = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
       if(act==='draw'){
@@ -956,6 +964,32 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
     }
     sv('ruler',ruler); syncTools(); renderAll();
   });
+  /* Vollbild für das Protokoll-Papier */
+  var pBox = $('#protokollBox');
+  function fsEl(){ return document.fullscreenElement || document.webkitFullscreenElement; }
+  function setPFull(on){
+    pBox.classList.toggle('pfull', on); document.body.classList.toggle('pfull-on', on);
+    $('#pFull').classList.toggle('on', on); $('#pFull').textContent = on ? '✕ Vollbild beenden' : '⛶ Vollbild';
+    if(on){ pBox.scrollTop = 0; }
+    else { pBox.scrollIntoView({block:'start'}); }
+  }
+  $('#pFull').addEventListener('click', function(){
+    var on = !pBox.classList.contains('pfull');
+    setPFull(on);
+    try{
+      if(on && !fsEl()){
+        var el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if(req){ var r = req.call(el); if(r && r.catch) r.catch(function(){}); }
+      } else if(!on && fsEl()){
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      }
+    }catch(e){}
+  });
+  function fsChange(){ if(!fsEl() && pBox.classList.contains('pfull')) setPFull(false); }
+  document.addEventListener('fullscreenchange', fsChange);
+  document.addEventListener('webkitfullscreenchange', fsChange);
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && pBox.classList.contains('pfull')) setPFull(false); });
+
   $('#pAdd').addEventListener('click', function(){
     pushUndo(); doc.pages.push({o:[]}); buildPages(); save();
     canv[canv.length-1].scrollIntoView({behavior:'smooth', block:'start'});
@@ -1014,6 +1048,7 @@ button.printbtn:hover{color:var(--ink);border-color:var(--ink)}
   window.addEventListener('afterprint', cleanupPrint);
   window.addEventListener('beforeprint', function(){ if(Date.now()-lastGen>3000) makePrintPages(); });
   $('#pPrint').addEventListener('click', function(){
+    if(pBox.classList.contains('pfull')) setPFull(false);
     makePrintPages(); cleanupPrint();
     var st = document.createElement('style'); st.id = 'pgOnly'; st.textContent = '@page{size:A4 portrait;margin:0}';
     document.head.appendChild(st); document.body.classList.add('only-prot');
